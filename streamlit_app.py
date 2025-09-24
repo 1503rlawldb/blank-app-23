@@ -1,166 +1,149 @@
-import pygame
+import tkinter as tk
 import random
-import os
+import time
 
-# 게임 화면 설정
-SCREEN_WIDTH = 600
-SCREEN_HEIGHT = 800
-FPS = 60
+# --- 게임 설정 ---
+WIDTH = 500
+HEIGHT = 700
+NOTE_SPEED = 5
+NOTE_WIDTH = 80
+NOTE_HEIGHT = 20
 
-# 색상 정의
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
-BLUE = (0, 0, 255)
-YELLOW = (255, 255, 0)
+# --- 색상 ---
+COLORS = ["#FFADAD", "#FFD6A5", "#FDFFB6", "#CAFFBF"] # A, S, D, F 키 색상
+BACKGROUND_COLOR = "#333333"
+LINE_COLOR = "#FFFFFF"
 
-# Pygame 초기화
-pygame.init()
-pygame.mixer.init()
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("간단 리듬 게임")
-clock = pygame.time.Clock()
-
-# --- 음악 및 효과음 로드 ---
-# 아래 'assets' 폴더를 만들고 사운드 파일을 넣어주세요.
-# 예시 파일: https://drive.google.com/drive/folders/1-ABGq_xM2_6Yk2gDaY4gZ3d7B_c7B-9b?usp=sharing
-# 위 링크에서 파일을 다운받아 코드 파일과 같은 위치에 'assets' 폴더를 만들어 넣어주세요.
-
+# --- 효과음 (Windows 전용) ---
+# winsound는 Windows에만 기본 포함된 라이브러리입니다.
 try:
-    pygame.mixer.music.load(os.path.join("assets", "background_music.mp3"))
-    hit_sound = pygame.mixer.Sound(os.path.join("assets", "hit_sound.wav"))
-    miss_sound = pygame.mixer.Sound(os.path.join("assets", "miss_sound.wav"))
-    pygame.mixer.music.set_volume(0.5)
-    hit_sound.set_volume(0.8)
-    miss_sound.set_volume(0.4)
-except pygame.error as e:
-    print(f"오디오 파일을 불러올 수 없습니다: {e}")
-    print("게임 실행을 위해 'assets' 폴더와 사운드 파일이 필요합니다.")
-    # 필요한 경우, 여기서 프로그램을 종료하거나 기본값으로 계속 진행할 수 있습니다.
+    import winsound
+    SOUND_ENABLED = True
+except ImportError:
+    SOUND_ENABLED = False
+    print("알림: 현재 운영체제에서는 효과음을 재생할 수 없습니다. (Windows 전용)")
 
+def play_hit_sound():
+    if SOUND_ENABLED:
+        # SND_ASYNC: 소리가 나는 동안 게임이 멈추지 않도록 함
+        winsound.PlaySound("assets/hit_sound.wav", winsound.SND_ASYNC)
 
-# 노트 클래스
-class Note(pygame.sprite.Sprite):
-    def __init__(self, column):
-        super().__init__()
-        self.column = column
-        self.image = pygame.Surface([100, 20])
-        colors = [RED, GREEN, BLUE, YELLOW]
-        self.image.fill(colors[column])
-        self.rect = self.image.get_rect()
-        self.rect.x = 50 + column * 125
-        self.rect.y = -50
-        self.speed = 7
+def play_miss_sound():
+    if SOUND_ENABLED:
+        winsound.PlaySound("assets/miss_sound.wav", winsound.SND_ASYNC)
 
-    def update(self):
-        self.rect.y += self.speed
-        if self.rect.top > SCREEN_HEIGHT:
-            self.kill() # 화면 밖으로 나가면 노트 제거
-
-# 게임 변수
-all_sprites = pygame.sprite.Group()
-notes = pygame.sprite.Group()
+# --- 게임 상태 변수 ---
 score = 0
 combo = 0
-font = pygame.font.SysFont("malgungothic", 40)
-spawn_timer = 0
-spawn_rate = 30 # 숫자가 작을수록 노트가 자주 나옴
+notes = [] # 현재 화면의 노트들을 저장하는 리스트
+
+# --- 게임 창 설정 ---
+root = tk.Tk()
+root.title("No-Install Rhythm Game")
+root.resizable(False, False) # 창 크기 변경 불가
+
+canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg=BACKGROUND_COLOR)
+canvas.pack()
+
+# --- 게임 요소 그리기 ---
+# 게임 라인
+for i in range(5):
+    x = 50 + i * 100
+    canvas.create_line(x, 0, x, HEIGHT, fill=LINE_COLOR, width=2)
 
 # 판정선
-judgment_line_y = SCREEN_HEIGHT - 100
+JUDGEMENT_LINE_Y = HEIGHT - 100
+canvas.create_line(50, JUDGEMENT_LINE_Y, 450, JUDGEMENT_LINE_Y, fill="#FFFF00", width=5)
 
-# 키 상태를 저장할 딕셔너리
-key_pressed_effect = {pygame.K_a: 0, pygame.K_s: 0, pygame.K_d: 0, pygame.K_f: 0}
-key_mapping = {
-    pygame.K_a: 0,
-    pygame.K_s: 1,
-    pygame.K_d: 2,
-    pygame.K_f: 3
-}
-key_positions = [100, 225, 350, 475]
+# 점수 및 콤보 텍스트
+score_text = canvas.create_text(10, 10, text=f"Score: {score}", fill=LINE_COLOR, font=("Arial", 16), anchor="nw")
+combo_text = canvas.create_text(10, 40, text=f"Combo: {combo}", fill=LINE_COLOR, font=("Arial", 16), anchor="nw")
+start_text = canvas.create_text(WIDTH/2, HEIGHT/2, text="Press Any Key to Start", fill=LINE_COLOR, font=("Arial", 24))
 
+# --- 게임 로직 ---
+def create_note():
+    lane = random.randint(0, 3)
+    x1 = 50 + lane * 100 + 10
+    y1 = -NOTE_HEIGHT
+    x2 = x1 + NOTE_WIDTH
+    y2 = 0
+    
+    note_id = canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS[lane])
+    notes.append({'id': note_id, 'lane': lane})
 
-# 게임 루프
-running = True
-game_started = False
+def move_notes():
+    global combo
+    
+    # 리스트 복사본을 순회하여 삭제 오류 방지
+    for note in notes[:]:
+        canvas.move(note['id'], 0, NOTE_SPEED)
+        pos = canvas.coords(note['id'])
+        
+        # 판정선을 지나치면 MISS 처리
+        if pos and pos[1] > JUDGEMENT_LINE_Y + 20:
+            canvas.delete(note['id'])
+            notes.remove(note)
+            combo = 0
+            canvas.itemconfig(combo_text, text=f"Combo: {combo}")
+            play_miss_sound()
 
-while running:
-    clock.tick(FPS)
+def check_hit(lane_to_check):
+    global score, combo
+    
+    hit = False
+    for note in notes[:]:
+        if note['lane'] == lane_to_check:
+            pos = canvas.coords(note['id'])
+            # 판정선 근처에 있는지 확인
+            if pos and abs(pos[3] - JUDGEMENT_LINE_Y) < 30:
+                canvas.delete(note['id'])
+                notes.remove(note)
+                
+                score += 100
+                combo += 1
+                canvas.itemconfig(score_text, text=f"Score: {score}")
+                canvas.itemconfig(combo_text, text=f"Combo: {combo}")
+                play_hit_sound()
+                hit = True
+                break # 한 번에 하나의 노트만 처리
+    
+    if not hit:
+        combo = 0
+        canvas.itemconfig(combo_text, text=f"Combo: {combo}")
+        play_miss_sound()
 
-    # 이벤트 처리
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        if event.type == pygame.KEYDOWN:
-            if not game_started:
-                game_started = True
-                pygame.mixer.music.play(-1) # 음악 무한 반복 재생
+# --- 키 입력 처리 ---
+key_map = {'a': 0, 's': 1, 'd': 2, 'f': 3}
+for key, lane in key_map.items():
+    # 람다 함수를 사용하여 올바른 lane 값을 전달
+    root.bind(f"<KeyPress-{key}>", lambda event, l=lane: check_hit(l))
 
-            if event.key in key_pressed_effect:
-                key_pressed_effect[event.key] = 10 # 키 누름 효과 타이머 설정
-                col = key_mapping[event.key]
-                hit = False
-                # 판정선 근처 노트 찾기
-                for note in notes:
-                    if note.column == col and abs(note.rect.centery - judgment_line_y) < 40:
-                        hit_sound.play()
-                        score += 100
-                        combo += 1
-                        note.kill()
-                        hit = True
-                        break
-                if not hit:
-                    miss_sound.play()
-                    combo = 0
+# --- 메인 게임 루프 ---
+game_running = False
+note_spawn_counter = 0
 
+def game_loop():
+    global note_spawn_counter
+    
+    if game_running:
+        move_notes()
+        
+        note_spawn_counter += 1
+        if note_spawn_counter >= 50: # 노트 생성 주기
+            create_note()
+            note_spawn_counter = 0
 
-    # 게임 로직
-    if game_started:
-        spawn_timer += 1
-        if spawn_timer >= spawn_rate:
-            spawn_timer = 0
-            new_note = Note(random.randint(0, 3))
-            all_sprites.add(new_note)
-            notes.add(new_note)
+    # 1/60초(약 16ms)마다 game_loop 함수를 다시 실행
+    root.after(16, game_loop)
 
-        all_sprites.update()
+def start_game(event):
+    global game_running
+    if not game_running:
+        game_running = True
+        canvas.delete(start_text)
+        game_loop()
 
-        # 판정선을 지나친 노트 처리
-        for note in notes:
-            if note.rect.top > judgment_line_y + 40:
-                 miss_sound.play()
-                 combo = 0
-                 note.kill()
+# 아무 키나 누르면 게임 시작
+root.bind("<KeyPress>", start_game)
 
-
-    # 화면 그리기
-    screen.fill(BLACK)
-    all_sprites.draw(screen)
-
-    # UI 그리기 (라인, 판정선, 점수 등)
-    for i in range(5):
-        pygame.draw.line(screen, WHITE, (50 + i * 125, 0), (50 + i * 125, SCREEN_HEIGHT), 2)
-    pygame.draw.line(screen, YELLOW, (50, judgment_line_y), (550, judgment_line_y), 5)
-
-    # 키 누름 효과
-    for key, timer in key_pressed_effect.items():
-        if timer > 0:
-            col = key_mapping[key]
-            pygame.draw.rect(screen, WHITE, [50 + col * 125, judgment_line_y - 50, 100, 100], 5)
-            key_pressed_effect[key] -= 1
-
-    # 시작 화면
-    if not game_started:
-        start_text = font.render("아무 키나 눌러서 시작하세요!", True, WHITE)
-        screen.blit(start_text, (SCREEN_WIDTH // 2 - start_text.get_width() // 2, SCREEN_HEIGHT // 2 - start_text.get_height() // 2))
-
-    # 점수와 콤보 표시
-    score_text = font.render(f"Score: {score}", True, WHITE)
-    combo_text = font.render(f"Combo: {combo}", True, YELLOW if combo > 0 else WHITE)
-    screen.blit(score_text, (10, 10))
-    screen.blit(combo_text, (10, 60))
-
-    pygame.display.flip()
-
-pygame.quit()
+root.mainloop()
