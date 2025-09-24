@@ -1,21 +1,12 @@
 import tkinter as tk
-import random
-import time
+from tkinter import messagebox
 
 # --- 게임 설정 ---
 WIDTH = 500
-HEIGHT = 700
-NOTE_SPEED = 5
-NOTE_WIDTH = 80
-NOTE_HEIGHT = 20
-
-# --- 색상 ---
-COLORS = ["#FFADAD", "#FFD6A5", "#FDFFB6", "#CAFFBF"] # A, S, D, F 키 색상
-BACKGROUND_COLOR = "#333333"
-LINE_COLOR = "#FFFFFF"
+HEIGHT = 600
+SECONDS_PER_YEAR = 5 # 1살 먹는 데 걸리는 실제 시간(초)
 
 # --- 효과음 (Windows 전용) ---
-# winsound는 Windows에만 기본 포함된 라이브러리입니다.
 try:
     import winsound
     SOUND_ENABLED = True
@@ -23,127 +14,147 @@ except ImportError:
     SOUND_ENABLED = False
     print("알림: 현재 운영체제에서는 효과음을 재생할 수 없습니다. (Windows 전용)")
 
-def play_hit_sound():
+def play_sound(sound_file):
     if SOUND_ENABLED:
-        # SND_ASYNC: 소리가 나는 동안 게임이 멈추지 않도록 함
-        winsound.PlaySound("assets/hit_sound.wav", winsound.SND_ASYNC)
-
-def play_miss_sound():
-    if SOUND_ENABLED:
-        winsound.PlaySound("assets/miss_sound.wav", winsound.SND_ASYNC)
+        try:
+            winsound.PlaySound(f"assets/{sound_file}", winsound.SND_ASYNC | winsound.SND_FILENAME)
+        except Exception as e:
+            print(f"사운드 파일 재생 오류: {e}")
+            print(f"'{sound_file}' 파일이 'assets' 폴더에 있는지 확인하세요.")
 
 # --- 게임 상태 변수 ---
-score = 0
-combo = 0
-notes = [] # 현재 화면의 노트들을 저장하는 리스트
+age = 0
+subscribers = 0
+subscribers_per_click = 1
+subscribers_per_second = 0
+
+# 업그레이드 비용
+quality_upgrade_cost = 10
+equipment_upgrade_cost = 50
+
+# 시간 흐름 관리
+age_timer = 0
 
 # --- 게임 창 설정 ---
 root = tk.Tk()
-root.title("No-Install Rhythm Game")
-root.resizable(False, False) # 창 크기 변경 불가
+root.title("도티 키우기")
+root.geometry(f"{WIDTH}x{HEIGHT}")
+root.resizable(False, False)
 
-canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg=BACKGROUND_COLOR)
-canvas.pack()
+# --- 도티 상태에 따른 텍스트 ---
+# 나이에 따라 캐릭터 설명과 이미지가 바뀝니다.
+DOTTY_STAGES = {
+    0: {"desc": "변기에서 태어난 아기 도티", "color": "#FFD1DC"},
+    10: {"desc": "샌드박스에 놀러 간 학생 도티", "color": "#A2D2FF"},
+    20: {"desc": "열정 넘치는 신인 크리에이터 도티", "color": "#BDE0FE"},
+    30: {"desc": "어엿한 베테랑 크리에이터 도티", "color": "#FFC8DD"},
+    40: {"desc": "살아있는 전설, 40살의 도티!", "color": "#FFAFCC"}
+}
 
-# --- 게임 요소 그리기 ---
-# 게임 라인
-for i in range(5):
-    x = 50 + i * 100
-    canvas.create_line(x, 0, x, HEIGHT, fill=LINE_COLOR, width=2)
-
-# 판정선
-JUDGEMENT_LINE_Y = HEIGHT - 100
-canvas.create_line(50, JUDGEMENT_LINE_Y, 450, JUDGEMENT_LINE_Y, fill="#FFFF00", width=5)
-
-# 점수 및 콤보 텍스트
-score_text = canvas.create_text(10, 10, text=f"Score: {score}", fill=LINE_COLOR, font=("Arial", 16), anchor="nw")
-combo_text = canvas.create_text(10, 40, text=f"Combo: {combo}", fill=LINE_COLOR, font=("Arial", 16), anchor="nw")
-start_text = canvas.create_text(WIDTH/2, HEIGHT/2, text="Press Any Key to Start", fill=LINE_COLOR, font=("Arial", 24))
-
-# --- 게임 로직 ---
-def create_note():
-    lane = random.randint(0, 3)
-    x1 = 50 + lane * 100 + 10
-    y1 = -NOTE_HEIGHT
-    x2 = x1 + NOTE_WIDTH
-    y2 = 0
+# --- UI 함수 ---
+def update_display():
+    """화면의 모든 텍스트를 현재 상태에 맞게 업데이트합니다."""
+    # 구독자 수 표시 (단위 추가)
+    if subscribers >= 10000:
+        sub_text = f"{subscribers/10000:.2f}만 명"
+    else:
+        sub_text = f"{subscribers}명"
     
-    note_id = canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS[lane])
-    notes.append({'id': note_id, 'lane': lane})
-
-def move_notes():
-    global combo
+    sub_label.config(text=f"구독자: {sub_text}")
+    age_label.config(text=f"나이: {age}살")
     
-    # 리스트 복사본을 순회하여 삭제 오류 방지
-    for note in notes[:]:
-        canvas.move(note['id'], 0, NOTE_SPEED)
-        pos = canvas.coords(note['id'])
-        
-        # 판정선을 지나치면 MISS 처리
-        if pos and pos[1] > JUDGEMENT_LINE_Y + 20:
-            canvas.delete(note['id'])
-            notes.remove(note)
-            combo = 0
-            canvas.itemconfig(combo_text, text=f"Combo: {combo}")
-            play_miss_sound()
-
-def check_hit(lane_to_check):
-    global score, combo
+    # 업그레이드 버튼 텍스트 업데이트
+    quality_button.config(text=f"영상 퀄리티 ({quality_upgrade_cost}명)")
+    equipment_button.config(text=f"장비 업그레이드 ({equipment_upgrade_cost}명)")
     
-    hit = False
-    for note in notes[:]:
-        if note['lane'] == lane_to_check:
-            pos = canvas.coords(note['id'])
-            # 판정선 근처에 있는지 확인
-            if pos and abs(pos[3] - JUDGEMENT_LINE_Y) < 30:
-                canvas.delete(note['id'])
-                notes.remove(note)
-                
-                score += 100
-                combo += 1
-                canvas.itemconfig(score_text, text=f"Score: {score}")
-                canvas.itemconfig(combo_text, text=f"Combo: {combo}")
-                play_hit_sound()
-                hit = True
-                break # 한 번에 하나의 노트만 처리
-    
-    if not hit:
-        combo = 0
-        canvas.itemconfig(combo_text, text=f"Combo: {combo}")
-        play_miss_sound()
+    # 나이에 맞는 도티 상태 업데이트
+    current_stage_age = max([k for k in DOTTY_STAGES if k <= age])
+    stage_info = DOTTY_STAGES[current_stage_age]
+    dotty_status_label.config(text=stage_info["desc"])
+    dotty_display_frame.config(bg=stage_info["color"])
 
-# --- 키 입력 처리 ---
-key_map = {'a': 0, 's': 1, 'd': 2, 'f': 3}
-for key, lane in key_map.items():
-    # 람다 함수를 사용하여 올바른 lane 값을 전달
-    root.bind(f"<KeyPress-{key}>", lambda event, l=lane: check_hit(l))
 
-# --- 메인 게임 루프 ---
-game_running = False
-note_spawn_counter = 0
+# --- 게임 로직 함수 ---
+def create_content():
+    """'콘텐츠 제작' 버튼 클릭 시 호출됩니다."""
+    global subscribers
+    subscribers += subscribers_per_click
+    play_sound("click.wav")
+    update_display()
+
+def upgrade_quality():
+    """영상 퀄리티 업그레이드"""
+    global subscribers, subscribers_per_click, quality_upgrade_cost
+    if subscribers >= quality_upgrade_cost:
+        subscribers -= quality_upgrade_cost
+        subscribers_per_click += 1
+        quality_upgrade_cost = int(quality_upgrade_cost * 1.5)
+        update_display()
+
+def upgrade_equipment():
+    """장비 업그레이드 (자동 성장)"""
+    global subscribers, subscribers_per_second, equipment_upgrade_cost
+    if subscribers >= equipment_upgrade_cost:
+        subscribers -= equipment_upgrade_cost
+        subscribers_per_second += 1
+        equipment_upgrade_cost = int(equipment_upgrade_cost * 1.8)
+        update_display()
 
 def game_loop():
-    global note_spawn_counter
+    """게임의 메인 루프. 1초마다 실행됩니다."""
+    global age, age_timer, subscribers
     
-    if game_running:
-        move_notes()
-        
-        note_spawn_counter += 1
-        if note_spawn_counter >= 50: # 노트 생성 주기
-            create_note()
-            note_spawn_counter = 0
+    # 자동 구독자 증가
+    subscribers += subscribers_per_second
+    
+    # 나이 증가
+    age_timer += 1
+    if age_timer >= SECONDS_PER_YEAR:
+        age += 1
+        age_timer = 0
+        if age == 1: # 1살이 될 때 배경음악 시작
+             play_sound("bgm.wav")
+    
+    update_display()
+    
+    # 게임 종료 조건
+    if age >= 40:
+        messagebox.showinfo("게임 클리어!", f"축하합니다! 도티를 40살까지 성공적으로 키웠습니다!\n최종 구독자 수: {subscribers}명")
+        root.destroy()
+    else:
+        root.after(1000, game_loop) # 1000ms = 1초 뒤에 다시 실행
 
-    # 1/60초(약 16ms)마다 game_loop 함수를 다시 실행
-    root.after(16, game_loop)
 
-def start_game(event):
-    global game_running
-    if not game_running:
-        game_running = True
-        canvas.delete(start_text)
-        game_loop()
+# --- UI 위젯 생성 ---
 
-# 아무 키나 누르면 게임 시작
-root.bind("<KeyPress>", start_game)
+# 상단 정보 프레임
+info_frame = tk.Frame(root)
+info_frame.pack(pady=10)
+age_label = tk.Label(info_frame, text="나이: 0살", font=("Arial", 16))
+age_label.pack(side="left", padx=10)
+sub_label = tk.Label(info_frame, text="구독자: 0명", font=("Arial", 16))
+sub_label.pack(side="left", padx=10)
 
+# 도티 상태 표시 프레임
+dotty_display_frame = tk.Frame(root, bg="#FFD1DC", bd=2, relief="solid")
+dotty_display_frame.pack(pady=20, padx=20, fill="x")
+dotty_status_label = tk.Label(dotty_display_frame, text="변기에서 태어난 아기 도티", font=("Arial", 20, "bold"), height=4)
+dotty_status_label.pack(pady=20)
+
+# 메인 액션 버튼
+action_button = tk.Button(root, text="콘텐츠 제작!", font=("Arial", 18, "bold"), command=create_content, bg="#FF6B6B", fg="white")
+action_button.pack(pady=10, ipadx=20, ipady=10)
+
+# 업그레이드 프레임
+upgrade_frame = tk.Frame(root)
+upgrade_frame.pack(pady=20)
+quality_button = tk.Button(upgrade_frame, text=f"영상 퀄리티 ({quality_upgrade_cost}명)", command=upgrade_quality)
+quality_button.pack(side="left", padx=10, ipady=5)
+equipment_button = tk.Button(upgrade_frame, text=f"장비 업그레이드 ({equipment_upgrade_cost}명)", command=upgrade_equipment)
+equipment_button.pack(side="left", padx=10, ipady=5)
+
+
+# --- 게임 시작 ---
+play_sound("hoitjja.wav") # 게임 시작 시 "호잇짜" 재생
+game_loop()
 root.mainloop()
